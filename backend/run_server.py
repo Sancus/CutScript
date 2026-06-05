@@ -18,6 +18,13 @@ import sys
 # load a GUI backend (tkinter/Qt) that isn't bundled.
 os.environ.setdefault("MPLBACKEND", "Agg")
 
+# When frozen, ffmpeg.exe ships next to the executable. whisperx/moviepy shell
+# out to "ffmpeg", so make the bundled copy discoverable regardless of how the
+# process was launched (don't rely on the parent passing PATH).
+if getattr(sys, "frozen", False):
+    _exe_dir = os.path.dirname(sys.executable)
+    os.environ["PATH"] = _exe_dir + os.pathsep + os.environ.get("PATH", "")
+
 
 def _ensure_importable() -> None:
     """Make the backend package modules importable regardless of CWD.

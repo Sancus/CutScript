@@ -41,10 +41,6 @@
       {
         "from": "backend/dist/cutscript-backend",
         "to": "backend-dist"
-      },
-      {
-        "from": "build/ffmpeg",
-        "to": "ffmpeg"
       }
     ],
     "win": {

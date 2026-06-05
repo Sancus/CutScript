@@ -110,6 +110,10 @@ jobs:
           if (-not $ffmpeg) { throw "ffmpeg.exe not found in download" }
           Copy-Item $ffmpeg.FullName build/ffmpeg/
           if ($ffprobe) { Copy-Item $ffprobe.FullName build/ffmpeg/ }
+          # Ship ffmpeg next to the backend exe so it's always discoverable
+          # (run_server.py prepends the executable's dir to PATH).
+          Copy-Item $ffmpeg.FullName backend/dist/cutscript-backend/
+          if ($ffprobe) { Copy-Item $ffprobe.FullName backend/dist/cutscript-backend/ }
           Get-ChildItem build/ffmpeg
 
       - name: Smoke-test bundled backend (engine imports + transcription)

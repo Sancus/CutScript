@@ -28,7 +28,8 @@ class PythonBackend {
     // any library that shells out to ffmpeg can find it.
     const env = { ...process.env, PYTHONUNBUFFERED: '1' };
     if (!this.isDev) {
-      const ffmpegDir = path.join(process.resourcesPath, 'ffmpeg');
+      // ffmpeg.exe is bundled alongside the backend exe in backend-dist.
+      const ffmpegDir = path.join(process.resourcesPath, 'backend-dist');
       if (fs.existsSync(ffmpegDir)) {
         env.PATH = `${ffmpegDir}${path.delimiter}${env.PATH || ''}`;
       }

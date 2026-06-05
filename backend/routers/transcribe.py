@@ -1,6 +1,7 @@
 """Transcription endpoint using WhisperX."""
 
 import logging
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -23,6 +24,12 @@ class TranscribeRequest(BaseModel):
 
 @router.post("/transcribe")
 async def transcribe(req: TranscribeRequest):
+    # Validate the input up front so a genuinely missing file is a clear 404,
+    # rather than masking unrelated FileNotFoundErrors (e.g. a missing ffmpeg
+    # executable) as if the input were missing.
+    if not Path(req.file_path).is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {req.file_path}")
+
     try:
         # Imported lazily so the backend boots fast: the heavy ML stack
         # (torch/whisperx/pyannote) only loads on the first transcription.
@@ -48,8 +55,8 @@ async def transcribe(req: TranscribeRequest):
 
         return result
 
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail=f"File not found: {req.file_path}")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Transcription failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
