@@ -112,6 +112,65 @@ jobs:
           if ($ffprobe) { Copy-Item $ffprobe.FullName build/ffmpeg/ }
           Get-ChildItem build/ffmpeg
 
+      - name: Smoke-test bundled backend (engine imports + transcription)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $exe = "backend/dist/cutscript-backend/cutscript-backend.exe"
+          if (-not (Test-Path $exe)) { throw "missing $exe" }
+
+          # whisperx/moviepy shell out to ffmpeg; make the bundled copy visible.
+          $env:PATH = "$((Resolve-Path 'build/ffmpeg').Path);$env:PATH"
+
+          $out = Join-Path $env:RUNNER_TEMP "be_out.txt"
+          $err = Join-Path $env:RUNNER_TEMP "be_err.txt"
+          $proc = Start-Process -FilePath $exe `
+            -ArgumentList "--host","127.0.0.1","--port","8642" `
+            -PassThru -WindowStyle Hidden `
+            -RedirectStandardOutput $out -RedirectStandardError $err
+          try {
+            # 1) liveness
+            $healthy = $false
+            for ($i=0; $i -lt 60; $i++) {
+              try { if ((Invoke-RestMethod "http://127.0.0.1:8642/health" -TimeoutSec 3).status -eq 'ok') { $healthy = $true; break } } catch {}
+              Start-Sleep 2
+            }
+            if (-not $healthy) { throw "backend did not become healthy" }
+
+            # 2) the ML engine must actually import (this is what catches missing
+            #    bundled deps like imageio / matplotlib).
+            $engineOk = $false
+            for ($i=0; $i -lt 180; $i++) {
+              $r = $null
+              try { $r = Invoke-RestMethod "http://127.0.0.1:8642/ready" -TimeoutSec 5 } catch {}
+              if ($r) {
+                Write-Host "engine state: $($r.state)"
+                if ($r.state -eq 'ready') { $engineOk = $true; break }
+                if ($r.state -eq 'error') { throw "ENGINE IMPORT FAILED: $($r.detail)" }
+              }
+              Start-Sleep 3
+            }
+            if (-not $engineOk) { throw "engine did not become ready in time" }
+            Write-Host "PASS: transcription engine imported"
+
+            # 3) real end-to-end transcription on a generated clip (exercises the
+            #    full runtime path: ffmpeg decode -> model -> alignment).
+            $wav = Join-Path $env:RUNNER_TEMP "smoke.wav"
+            ffmpeg -y -f lavfi -i "sine=frequency=440:duration=3" -ac 1 -ar 16000 "$wav" | Out-Null
+            if (-not (Test-Path $wav)) { throw "failed to generate test audio" }
+            $body = @{ file_path = $wav; model = "tiny"; language = "en"; use_cache = $false } | ConvertTo-Json
+            $resp = Invoke-RestMethod "http://127.0.0.1:8642/transcribe" -Method Post -ContentType "application/json" -Body $body -TimeoutSec 900
+            if ($null -eq $resp.PSObject.Properties['segments']) {
+              throw "transcription response missing 'segments': $($resp | ConvertTo-Json -Depth 4)"
+            }
+            Write-Host "PASS: end-to-end transcription ran (segments: $($resp.segments.Count))"
+          }
+          finally {
+            if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+            Write-Host "----- backend stdout -----"; Get-Content $out -Tail 60 -ErrorAction SilentlyContinue
+            Write-Host "----- backend stderr -----"; Get-Content $err -Tail 60 -ErrorAction SilentlyContinue
+          }
+
       - name: Build frontend
         shell: pwsh
         working-directory: frontend

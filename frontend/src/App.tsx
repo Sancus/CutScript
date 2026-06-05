@@ -38,11 +38,15 @@ export default function App() {
   const [activePanel, setActivePanel] = useState<Panel>(null);
   const [manualPath, setManualPath] = useState('');
   const [whisperModel, setWhisperModel] = useState('base');
-  const [backendReady, setBackendReady] = useState(!IS_ELECTRON);
+  const [engine, setEngine] = useState<{ state: string; detail?: string | null }>(
+    IS_ELECTRON ? { state: 'starting' } : { state: 'ready' },
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useKeyboardShortcuts();
 
+  // Poll /ready, which reflects whether the ML stack actually imported (not just
+  // that the HTTP server is up). Stop once it's definitively ready or errored.
   useEffect(() => {
     if (!IS_ELECTRON) return;
     let cancelled = false;
@@ -51,15 +55,16 @@ export default function App() {
       const poll = async () => {
         while (!cancelled) {
           try {
-            const r = await fetch(`${url}/health`);
+            const r = await fetch(`${url}/ready`);
             if (r.ok) {
-              if (!cancelled) setBackendReady(true);
-              return;
+              const data = await r.json();
+              if (!cancelled) setEngine(data);
+              if (data.state === 'ready' || data.state === 'error') return;
             }
           } catch {
             // backend not up yet; keep polling
           }
-          await new Promise((res) => setTimeout(res, 700));
+          await new Promise((res) => setTimeout(res, 1000));
         }
       };
       poll();
@@ -69,20 +74,31 @@ export default function App() {
     };
   }, [setBackendUrl]);
 
-  // Resolve once the backend answers /health, so transcription started right
-  // after launch waits for the engine instead of failing with a refused fetch.
-  const waitForBackend = async (timeoutMs = 120000): Promise<boolean> => {
+  const engineReady = engine.state === 'ready';
+
+  // Block until the engine is actually usable; throw the real error if it failed
+  // to load so the user sees why instead of a generic 500.
+  const waitForEngine = async (timeoutMs = 180000): Promise<void> => {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       try {
-        const r = await fetch(`${backendUrl}/health`);
-        if (r.ok) return true;
-      } catch {
-        // not ready yet
+        const r = await fetch(`${backendUrl}/ready`);
+        if (r.ok) {
+          const data = await r.json();
+          setEngine(data);
+          if (data.state === 'ready') return;
+          if (data.state === 'error') {
+            throw new Error(`Transcription engine failed to load: ${data.detail}`);
+          }
+        }
+      } catch (e) {
+        if (e instanceof Error && e.message.startsWith('Transcription engine failed')) {
+          throw e;
+        }
       }
-      await new Promise((res) => setTimeout(res, 700));
+      await new Promise((res) => setTimeout(res, 1000));
     }
-    return false;
+    throw new Error('Transcription engine did not become ready in time.');
   };
 
   const handleLoadProject = async () => {
@@ -127,12 +143,7 @@ export default function App() {
   const transcribeVideo = async (path: string) => {
     setTranscribing(true, 0);
     try {
-      const ready = await waitForBackend();
-      if (!ready) {
-        throw new Error(
-          'The transcription engine did not start in time. Check %APPDATA%\\CutScript\\backend.log.',
-        );
-      }
+      await waitForEngine();
       const res = await fetch(`${backendUrl}/transcribe`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -183,7 +194,7 @@ export default function App() {
           <div className="flex flex-col items-center gap-3">
             <button
               onClick={handleOpenFile}
-              disabled={!backendReady}
+              disabled={!engineReady}
               className="flex items-center gap-2 px-6 py-3 bg-editor-accent hover:bg-editor-accent-hover disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-white font-medium transition-colors"
             >
               <FolderOpen className="w-5 h-5" />
@@ -191,25 +202,37 @@ export default function App() {
             </button>
             <button
               onClick={handleLoadProject}
-              disabled={!backendReady}
+              disabled={!engineReady}
               className="flex items-center gap-2 px-4 py-2 text-sm text-editor-text-muted hover:text-editor-text hover:bg-editor-surface disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition-colors"
             >
               <FileInput className="w-4 h-4" />
               Load Project (.aive)
             </button>
-            <div className="flex items-center gap-2 text-xs h-4">
-              {backendReady ? (
-                <>
-                  <span className="w-2 h-2 rounded-full bg-green-500" />
-                  <span className="text-editor-text-muted">Transcription engine ready</span>
-                </>
-              ) : (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 text-editor-accent animate-spin" />
-                  <span className="text-editor-text-muted">Starting transcription engine…</span>
-                </>
-              )}
-            </div>
+            {engine.state === 'ready' && (
+              <div className="flex items-center gap-2 text-xs h-4">
+                <span className="w-2 h-2 rounded-full bg-green-500" />
+                <span className="text-editor-text-muted">Transcription engine ready</span>
+              </div>
+            )}
+            {engine.state === 'starting' && (
+              <div className="flex items-center gap-2 text-xs h-4">
+                <Loader2 className="w-3.5 h-3.5 text-editor-accent animate-spin" />
+                <span className="text-editor-text-muted">Starting transcription engine…</span>
+              </div>
+            )}
+            {engine.state === 'error' && (
+              <div className="flex flex-col items-center gap-1 max-w-md">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="w-2 h-2 rounded-full bg-red-500" />
+                  <span className="text-red-400">Transcription engine failed to load</span>
+                </div>
+                {engine.detail && (
+                  <code className="text-[10px] text-editor-text-muted break-all text-center">
+                    {engine.detail}
+                  </code>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           /* Browser: manual path input */

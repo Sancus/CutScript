@@ -1,6 +1,7 @@
 import logging
 import os
 import stat
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -14,9 +15,37 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# Tracks whether the heavy transcription stack actually imports. /health only
+# reports that uvicorn is alive; /ready reports whether the engine is usable.
+_engine_status = {"state": "starting", "detail": None}
+
+
+def _warmup_engine() -> None:
+    """Import the ML stack in the background so /ready reflects real usability.
+
+    Importing the third-party packages directly (before the service module's
+    whisperx->whisper fallback) means a missing dependency surfaces as its true
+    error instead of being masked.
+    """
+    global _engine_status
+    try:
+        import torch  # noqa: F401
+        import whisperx  # noqa: F401  -- surfaces real import errors (e.g. matplotlib)
+        import pyannote.audio  # noqa: F401
+        import services.transcription  # noqa: F401
+        import services.diarization  # noqa: F401
+        _engine_status = {"state": "ready", "detail": None}
+        logger.info("Transcription engine warmed up and ready")
+    except Exception as exc:  # noqa: BLE001
+        _engine_status = {"state": "error", "detail": f"{type(exc).__name__}: {exc}"}
+        logger.error("Transcription engine failed to load", exc_info=True)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("AI Video Editor backend starting up")
+    # Warm up off the event loop so startup/health stay instant.
+    threading.Thread(target=_warmup_engine, name="engine-warmup", daemon=True).start()
     yield
     logger.info("AI Video Editor backend shutting down")
 
@@ -115,3 +144,13 @@ async def serve_local_file(request: Request, path: str = Query(...)):
 @app.get("/health")
 async def health():
     return {"status": "ok"}
+
+
+@app.get("/ready")
+async def ready():
+    """Report whether the transcription engine actually imported.
+
+    state is one of: "starting" (still importing), "ready" (usable),
+    or "error" (import failed; `detail` carries the reason).
+    """
+    return _engine_status
