@@ -157,17 +157,28 @@ jobs:
             if (-not $engineOk) { throw "engine did not become ready in time" }
             Write-Host "PASS: transcription engine imported"
 
-            # 3) real end-to-end transcription on a generated clip (exercises the
-            #    full runtime path: ffmpeg decode -> model -> alignment).
+            # 3) real end-to-end transcription on actual speech (exercises the
+            #    full runtime path: ffmpeg decode -> VAD -> model -> alignment).
+            #    Generate speech with Windows' built-in SAPI TTS (no extra dep);
+            #    a pure tone would yield no VAD segments and isn't a real test.
             $wav = Join-Path $env:RUNNER_TEMP "smoke.wav"
-            ffmpeg -y -f lavfi -i "sine=frequency=440:duration=3" -ac 1 -ar 16000 "$wav" | Out-Null
+            Add-Type -AssemblyName System.Speech
+            $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+            $synth.SetOutputToWaveFile($wav)
+            $synth.Speak("The quick brown fox jumps over the lazy dog. Testing one two three four.")
+            $synth.Dispose()
             if (-not (Test-Path $wav)) { throw "failed to generate test audio" }
+
             $body = @{ file_path = $wav; model = "tiny"; language = "en"; use_cache = $false } | ConvertTo-Json
             $resp = Invoke-RestMethod "http://127.0.0.1:8642/transcribe" -Method Post -ContentType "application/json" -Body $body -TimeoutSec 900
-            if ($null -eq $resp.PSObject.Properties['segments']) {
-              throw "transcription response missing 'segments': $($resp | ConvertTo-Json -Depth 4)"
+            if ($null -eq $resp.PSObject.Properties['words']) {
+              throw "transcription response missing 'words': $($resp | ConvertTo-Json -Depth 4)"
             }
-            Write-Host "PASS: end-to-end transcription ran (segments: $($resp.segments.Count))"
+            if ($resp.words.Count -lt 1) {
+              throw "transcription produced no words from speech audio: $($resp | ConvertTo-Json -Depth 4)"
+            }
+            $text = ($resp.words | ForEach-Object { $_.word }) -join ' '
+            Write-Host "PASS: end-to-end transcription ran ($($resp.words.Count) words): $text"
           }
           finally {
             if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
