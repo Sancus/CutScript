@@ -43,6 +43,7 @@ jobs:
           python-version: "3.11"
 
       - name: Reclaim disk space (CUDA bundles are large)
+        if: env.CUDA_ENABLED == 'true'
         shell: pwsh
         continue-on-error: true
         run: |
