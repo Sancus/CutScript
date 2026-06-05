@@ -24,6 +24,38 @@ except ImportError:
     WHISPERX_AVAILABLE = False
     import whisper
 
+
+def _patch_speechbrain_lazy_imports():
+    """Make speechbrain's lazy modules safe for hasattr()/inspect on Windows.
+
+    speechbrain registers optional integrations (e.g. k2) as LazyModules whose
+    __getattr__ raises ImportError when the optional dep is missing. It guards
+    against inspect.py poking at them via `filename.endswith("/inspect.py")`,
+    but that forward-slash check never matches on Windows. The escaping
+    ImportError then crashes pytorch_lightning's inspect.stack() call during
+    model loading. Converting it to AttributeError makes hasattr() skip it.
+    """
+    try:
+        from speechbrain.utils import importutils as _sb
+        lazy_module = _sb.LazyModule
+        if getattr(lazy_module, "_cutscript_patched", False):
+            return
+        _orig_getattr = lazy_module.__getattr__
+
+        def _safe_getattr(self, attr):
+            try:
+                return _orig_getattr(self, attr)
+            except ImportError as exc:
+                raise AttributeError(attr) from exc
+
+        lazy_module.__getattr__ = _safe_getattr
+        lazy_module._cutscript_patched = True
+    except Exception:
+        pass
+
+
+_patch_speechbrain_lazy_imports()
+
 try:
     HF_TOKEN = None
     import os
