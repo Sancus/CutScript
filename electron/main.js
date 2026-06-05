@@ -1,12 +1,27 @@
 const { app, BrowserWindow, ipcMain, dialog, safeStorage } = require('electron');
 const path = require('path');
+const net = require('net');
 const { PythonBackend } = require('./python-bridge');
 
 let mainWindow = null;
 let pythonBackend = null;
 
 const isDev = !app.isPackaged;
-const BACKEND_PORT = 8642;
+let BACKEND_PORT = 8642;
+
+// Ask the OS for an unused port so the backend never clashes with a stale/
+// orphaned instance or another app sitting on a fixed port.
+function findFreePort() {
+  return new Promise((resolve, reject) => {
+    const srv = net.createServer();
+    srv.unref();
+    srv.on('error', reject);
+    srv.listen(0, '127.0.0.1', () => {
+      const { port } = srv.address();
+      srv.close(() => resolve(port));
+    });
+  });
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -40,7 +55,18 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  // In production, bind the backend to an ephemeral free port to avoid clashes
+  // with stale/orphaned backends or other apps. Dev keeps 8642 to match the
+  // separately-run `npm run dev:backend`.
+  if (!isDev) {
+    try {
+      BACKEND_PORT = await findFreePort();
+    } catch (err) {
+      console.error('[backend] Could not find a free port, using default:', err.message);
+    }
+  }
+
   // Show the UI immediately; the backend imports a heavy ML stack and can take
   // tens of seconds to become ready, so we must not block window creation on it.
   createWindow();
