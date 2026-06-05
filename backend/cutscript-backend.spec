@@ -84,6 +84,7 @@ COLLECT_PACKAGES = [
     "df",
     "av",
     "moviepy",
+    "imageio",
     "imageio_ffmpeg",
     "nltk",
     "julius",
@@ -137,6 +138,28 @@ META_PACKAGES = [
 ]
 for _pkg in META_PACKAGES:
     add_meta(_pkg)
+
+# Bundle metadata for EVERY installed distribution. Many packages in this stack
+# (imageio, transformers, speechbrain, pyannote, lightning, ...) call
+# importlib.metadata.version(...) or pkg_resources at import time, which raises
+# PackageNotFoundError unless the .dist-info is bundled. Copying all of it is
+# cheap (metadata is tiny) and avoids fixing these one crash at a time.
+import importlib.metadata as _ilmd
+
+_seen_meta = set()
+for _dist in _ilmd.distributions():
+    try:
+        _name = _dist.metadata["Name"]
+    except Exception:  # noqa: BLE001
+        _name = None
+    if not _name or _name in _seen_meta:
+        continue
+    _seen_meta.add(_name)
+    try:
+        datas += copy_metadata(_name)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[spec] no metadata for {_name}: {exc}")
+print(f"[spec] bundled metadata for {len(_seen_meta)} distributions")
 
 # Uvicorn picks its protocol/loop implementations dynamically at runtime.
 add_submodules("uvicorn")
