@@ -77,14 +77,19 @@ def get_playable_media(src_path: str) -> str:
             return cached
 
         ffmpeg = _find_ffmpeg()
-        vcodec, acodec = _probe_codecs(ffmpeg, str(src))
+        vcodec, _acodec = _probe_codecs(ffmpeg, str(src))
 
         digest = hashlib.md5(key.encode("utf-8")).hexdigest()[:16]
         out = os.path.join(tempfile.gettempdir(), f"cutscript_preview_{digest}.mp4")
 
+        # Copy H.264 video (instant); re-encode if it's anything else.
         vargs = ["-c:v", "copy"] if vcodec == "h264" else \
             ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"]
-        aargs = ["-c:a", "copy"] if acodec == "aac" else ["-c:a", "aac", "-b:a", "160k"]
+        # Always re-encode audio to AAC. Copying AAC out of Matroska/TS into MP4
+        # frequently produces silent audio in the browser (it needs the
+        # aac_adtstoasc bitstream filter); a clean re-encode sidesteps that and
+        # handles non-AAC sources uniformly. It's cheap relative to the video.
+        aargs = ["-c:a", "aac", "-b:a", "192k"]
 
         base = [ffmpeg, "-y", "-i", str(src), "-map", "0:v:0?", "-map", "0:a:0?"]
         cmd = [*base, *vargs, *aargs, "-movflags", "+faststart", out]
