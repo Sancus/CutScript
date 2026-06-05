@@ -1,7 +1,7 @@
 import { useRef, useCallback, useState, useEffect } from 'react';
 import { useEditorStore } from '../store/editorStore';
 import { useVideoSync } from '../hooks/useVideoSync';
-import { Play, Pause, SkipBack, SkipForward, Volume2 } from 'lucide-react';
+import { Play, Pause, SkipBack, SkipForward, Volume2, Volume1, VolumeX } from 'lucide-react';
 
 export default function VideoPlayer() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -11,6 +11,8 @@ export default function VideoPlayer() {
   const { seekTo, togglePlay } = useVideoSync(videoRef);
 
   const [displayTime, setDisplayTime] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [muted, setMuted] = useState(false);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -23,6 +25,21 @@ export default function VideoPlayer() {
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
   }, [videoUrl]);
+
+  // Apply volume/mute to the media element (also when a new video loads).
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+    video.volume = volume;
+    video.muted = muted;
+  }, [volume, muted, videoUrl]);
+
+  const toggleMute = useCallback(() => setMuted((m) => !m), []);
+  const handleVolume = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = parseFloat(e.target.value);
+    setVolume(v);
+    setMuted(v === 0);
+  }, []);
 
   const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60);
@@ -94,9 +111,32 @@ export default function VideoPlayer() {
             </ControlButton>
           </div>
 
-          <div className="flex items-center gap-3 text-xs text-editor-text-muted">
-            <Volume2 className="w-3.5 h-3.5" />
-            <span className="font-mono">
+          <div className="flex items-center gap-2 text-xs text-editor-text-muted">
+            <button
+              onClick={toggleMute}
+              title={muted ? 'Unmute' : 'Mute'}
+              className="hover:text-editor-text transition-colors"
+            >
+              {muted || volume === 0 ? (
+                <VolumeX className="w-4 h-4" />
+              ) : volume < 0.5 ? (
+                <Volume1 className="w-4 h-4" />
+              ) : (
+                <Volume2 className="w-4 h-4" />
+              )}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={muted ? 0 : volume}
+              onChange={handleVolume}
+              title="Volume"
+              className="w-20 cursor-pointer"
+              style={{ accentColor: '#6366f1' }}
+            />
+            <span className="font-mono ml-1">
               {formatTime(displayTime)} / {formatTime(duration)}
             </span>
           </div>
