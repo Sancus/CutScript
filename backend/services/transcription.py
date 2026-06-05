@@ -28,25 +28,39 @@ except ImportError:
 def _patch_speechbrain_lazy_imports():
     """Make speechbrain's lazy modules safe for hasattr()/inspect on Windows.
 
-    speechbrain registers optional integrations (e.g. k2) as LazyModules whose
-    __getattr__ raises ImportError when the optional dep is missing. It guards
-    against inspect.py poking at them via `filename.endswith("/inspect.py")`,
-    but that forward-slash check never matches on Windows. The escaping
-    ImportError then crashes pytorch_lightning's inspect.stack() call during
-    model loading. Converting it to AttributeError makes hasattr() skip it.
+    speechbrain registers optional integrations (e.g. k2) as LazyModules. Their
+    ensure_module() calls inspect.getframeinfo(), which re-enters
+    inspect.getmodule() -> hasattr(lazyModule, '__file__') -> __getattr__ ->
+    ensure_module() ... infinitely. speechbrain guards against this with
+    `filename.endswith("/inspect.py")`, but that forward-slash check never
+    matches on Windows, so pytorch_lightning's inspect.stack() during model
+    loading hits a RecursionError (and, if it imports, an ImportError for the
+    missing optional dep).
+
+    Fix with a thread-local re-entrancy guard: if __getattr__ is re-entered
+    while already resolving, raise AttributeError immediately to break the
+    cycle, and convert a failed optional import to AttributeError so hasattr()
+    simply skips it. Path-separator independent, so correct on all platforms.
     """
     try:
+        import threading
         from speechbrain.utils import importutils as _sb
         lazy_module = _sb.LazyModule
         if getattr(lazy_module, "_cutscript_patched", False):
             return
         _orig_getattr = lazy_module.__getattr__
+        _guard = threading.local()
 
         def _safe_getattr(self, attr):
+            if getattr(_guard, "busy", False):
+                raise AttributeError(attr)
+            _guard.busy = True
             try:
                 return _orig_getattr(self, attr)
             except ImportError as exc:
                 raise AttributeError(attr) from exc
+            finally:
+                _guard.busy = False
 
         lazy_module.__getattr__ = _safe_getattr
         lazy_module._cutscript_patched = True
