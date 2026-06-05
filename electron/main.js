@@ -40,11 +40,15 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(async () => {
-  pythonBackend = new PythonBackend(BACKEND_PORT, isDev);
-  await pythonBackend.start();
-
+app.whenReady().then(() => {
+  // Show the UI immediately; the backend imports a heavy ML stack and can take
+  // tens of seconds to become ready, so we must not block window creation on it.
   createWindow();
+
+  pythonBackend = new PythonBackend(BACKEND_PORT, isDev);
+  pythonBackend.start().catch((err) => {
+    console.error('[backend] Failed to start:', err);
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -116,7 +120,9 @@ ipcMain.handle('safe-storage:decrypt', (_event, encrypted) => {
 });
 
 ipcMain.handle('get-backend-url', () => {
-  return `http://localhost:${BACKEND_PORT}`;
+  // Use 127.0.0.1 (not "localhost"): on Windows "localhost" can resolve to IPv6
+  // ::1 first, but uvicorn binds IPv4 127.0.0.1, causing ERR_CONNECTION_REFUSED.
+  return `http://127.0.0.1:${BACKEND_PORT}`;
 });
 
 ipcMain.handle('fs:readFile', async (_event, filePath) => {

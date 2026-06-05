@@ -36,6 +36,10 @@ class PythonBackend {
 
     console.log(`[backend] Launching: ${command} ${args.join(' ')}`);
 
+    // Persist backend output to a log file so packaged-app startup failures are
+    // diagnosable (the bundled .exe has no visible console).
+    const logStream = this._openLogStream();
+
     this.process = spawn(command, args, {
       cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -45,11 +49,15 @@ class PythonBackend {
     });
 
     this.process.stdout.on('data', (data) => {
-      console.log(`[backend] ${data.toString().trim()}`);
+      const text = data.toString();
+      console.log(`[backend] ${text.trim()}`);
+      if (logStream) logStream.write(text);
     });
 
     this.process.stderr.on('data', (data) => {
-      console.error(`[backend] ${data.toString().trim()}`);
+      const text = data.toString();
+      console.error(`[backend] ${text.trim()}`);
+      if (logStream) logStream.write(text);
     });
 
     this.process.on('error', (err) => {
@@ -71,6 +79,20 @@ class PythonBackend {
       console.log(`[backend] Ready on port ${this.port}`);
     } catch (err) {
       console.error(`[backend] Not ready after ${readyTimeout}ms: ${err.message}`);
+    }
+  }
+
+  _openLogStream() {
+    try {
+      const { app } = require('electron');
+      const logPath = path.join(app.getPath('userData'), 'backend.log');
+      const stream = fs.createWriteStream(logPath, { flags: 'a' });
+      stream.write(`\n=== backend started ${new Date().toISOString()} ===\n`);
+      console.log(`[backend] Logging to ${logPath}`);
+      return stream;
+    } catch (err) {
+      console.error('[backend] Could not open log file:', err.message);
+      return null;
     }
   }
 
