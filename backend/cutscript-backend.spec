@@ -153,6 +153,11 @@ hiddenimports += [
     "anyio._backends._asyncio",
 ]
 
+# faster-whisper and ctranslate2 import pkg_resources at runtime.
+add_submodules("pkg_resources")
+add_meta("setuptools")
+hiddenimports += ["pkg_resources"]
+
 # The backend's own first-party modules.
 hiddenimports += [
     "main",
