@@ -26,7 +26,9 @@ jobs:
     env:
       # CPU-only by default for fast iteration; opt into CUDA via workflow_dispatch.
       CUDA_ENABLED: ${{ (github.event_name == 'workflow_dispatch' && inputs.cuda == true) && 'true' || 'false' }}
-      TORCH_CUDA_INDEX: https://download.pytorch.org/whl/cu124
+      # cu126 ships modern torch (>=2.7 has float8_e8m0fnu), keeping the CUDA
+      # build in sync with the CPU/PyPI torch that transformers expects.
+      TORCH_CUDA_INDEX: https://download.pytorch.org/whl/cu126
 
     steps:
       - name: Checkout
