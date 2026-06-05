@@ -9,7 +9,10 @@
     "dev:frontend": "cd frontend && npm run dev",
     "dev:electron": "electron .",
     "dev:backend": "cd backend && python -m uvicorn main:app --reload --port 8642",
-    "build": "cd frontend && npm run build && electron-builder",
+    "build:backend": "cd backend && pyinstaller --noconfirm --clean cutscript-backend.spec",
+    "build:frontend": "cd frontend && npm run build",
+    "build:win": "electron-builder --win --x64 --publish never",
+    "build": "npm run build:frontend && npm run build:backend && npm run build:win",
     "lint": "cd frontend && npm run lint"
   },
   "devDependencies": {
@@ -24,20 +27,40 @@
   "build": {
     "appId": "com.dataants.cutscript",
     "productName": "CutScript",
+    "asar": true,
+    "directories": {
+      "output": "dist"
+    },
     "files": [
       "electron/**/*",
       "frontend/dist/**/*",
-      "backend/**/*",
-      "shared/**/*"
+      "shared/**/*",
+      "!**/*.map"
     ],
     "extraResources": [
       {
-        "from": "backend",
-        "to": "backend"
+        "from": "backend/dist/cutscript-backend",
+        "to": "backend-dist"
+      },
+      {
+        "from": "build/ffmpeg",
+        "to": "ffmpeg"
       }
     ],
     "win": {
-      "target": "nsis"
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ],
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
     },
     "mac": {
       "target": "dmg"

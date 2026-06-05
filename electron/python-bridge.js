@@ -1,5 +1,6 @@
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
 
 class PythonBackend {
@@ -20,20 +21,27 @@ class PythonBackend {
       }
     }
 
-    const backendDir = this.isDev
-      ? path.join(__dirname, '..', 'backend')
-      : path.join(process.resourcesPath, 'backend');
+    const { command, args, cwd } = this._resolveLaunch();
 
-    const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+    // A bundled FFmpeg lives alongside the packaged backend so the app is
+    // fully self-contained. Make sure both the Electron-spawned process and
+    // any library that shells out to ffmpeg can find it.
+    const env = { ...process.env, PYTHONUNBUFFERED: '1' };
+    if (!this.isDev) {
+      const ffmpegDir = path.join(process.resourcesPath, 'ffmpeg');
+      if (fs.existsSync(ffmpegDir)) {
+        env.PATH = `${ffmpegDir}${path.delimiter}${env.PATH || ''}`;
+      }
+    }
 
-    this.process = spawn(pythonCmd, [
-      '-m', 'uvicorn', 'main:app',
-      '--host', '127.0.0.1',
-      '--port', String(this.port),
-    ], {
-      cwd: backendDir,
+    console.log(`[backend] Launching: ${command} ${args.join(' ')}`);
+
+    this.process = spawn(command, args, {
+      cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, PYTHONUNBUFFERED: '1' },
+      env,
+      // Prevent a console window from flashing for the bundled .exe on Windows.
+      windowsHide: true,
     });
 
     this.process.stdout.on('data', (data) => {
@@ -53,8 +61,44 @@ class PythonBackend {
       this.process = null;
     });
 
-    await this._waitForReady(30000);
-    console.log(`[backend] Ready on port ${this.port}`);
+    // The packaged backend imports torch/whisperx/pyannote at startup, which can
+    // take a while on first launch (DLL loading + onedir decompression). Give it
+    // a generous window, and don't hard-fail the app if it's still warming up —
+    // the renderer polls the backend URL on its own.
+    const readyTimeout = this.isDev ? 30000 : 180000;
+    try {
+      await this._waitForReady(readyTimeout);
+      console.log(`[backend] Ready on port ${this.port}`);
+    } catch (err) {
+      console.error(`[backend] Not ready after ${readyTimeout}ms: ${err.message}`);
+    }
+  }
+
+  _resolveLaunch() {
+    if (this.isDev) {
+      // Dev: run the FastAPI app via the system Python interpreter.
+      const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+      return {
+        command: pythonCmd,
+        args: [
+          '-m', 'uvicorn', 'main:app',
+          '--host', '127.0.0.1',
+          '--port', String(this.port),
+        ],
+        cwd: path.join(__dirname, '..', 'backend'),
+      };
+    }
+
+    // Production: run the self-contained backend bundled by PyInstaller.
+    const exeName = process.platform === 'win32'
+      ? 'cutscript-backend.exe'
+      : 'cutscript-backend';
+    const backendDir = path.join(process.resourcesPath, 'backend-dist');
+    return {
+      command: path.join(backendDir, exeName),
+      args: ['--host', '127.0.0.1', '--port', String(this.port)],
+      cwd: backendDir,
+    };
   }
 
   _isPortOpen(timeoutMs) {
