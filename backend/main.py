@@ -167,6 +167,27 @@ async def serve_preview(request: Request, path: str = Query(...)):
     return _stream_file(request, playable)
 
 
+@app.get("/audio")
+async def serve_audio(request: Request, path: str = Query(...)):
+    """Serve a clean mono WAV for waveform rendering.
+
+    decodeAudioData in the renderer can't reliably decode full video containers,
+    so the waveform fetches this extracted PCM track instead.
+    """
+    src = Path(path)
+    if not src.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+    from services.video_editor import get_audio_track
+    try:
+        audio = Path(get_audio_track(path))
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"Audio extraction failed: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    return _stream_file(request, audio)
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}

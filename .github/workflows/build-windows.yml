@@ -190,6 +190,13 @@ jobs:
             $sz = (Get-Item $pvOut).Length
             if ($sz -lt 1000) { throw "/preview produced too little data ($sz bytes)" }
             Write-Host "PASS: /preview produced playable mp4 ($sz bytes)"
+
+            # 5) /audio must extract a decodable WAV (used by the waveform).
+            $aOut = Join-Path $env:RUNNER_TEMP "audio.wav"
+            Invoke-WebRequest "http://127.0.0.1:8642/audio?path=$enc" -OutFile $aOut -TimeoutSec 120
+            $asz = (Get-Item $aOut).Length
+            if ($asz -lt 1000) { throw "/audio produced too little data ($asz bytes)" }
+            Write-Host "PASS: /audio extracted wav ($asz bytes)"
           }
           finally {
             if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }

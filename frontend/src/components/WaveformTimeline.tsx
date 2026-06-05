@@ -13,6 +13,7 @@ export default function WaveformTimeline() {
 
   const videoUrl = useEditorStore((s) => s.videoUrl);
   const videoPath = useEditorStore((s) => s.videoPath);
+  const backendUrl = useEditorStore((s) => s.backendUrl);
   const duration = useEditorStore((s) => s.duration);
   const deletedRanges = useEditorStore((s) => s.deletedRanges);
   const setCurrentTime = useEditorStore((s) => s.setCurrentTime);
@@ -44,7 +45,10 @@ export default function WaveformTimeline() {
         const ctx = new AudioContext();
         audioContextRef.current = ctx;
 
-        const response = await fetch(videoUrl);
+        // Decode a dedicated extracted WAV, not the video container (which the
+        // browser's decodeAudioData can't reliably handle).
+        const audioUrl = `${backendUrl}/audio?path=${encodeURIComponent(videoPath)}`;
+        const response = await fetch(audioUrl);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const arrayBuffer = await response.arrayBuffer();
         const audioBuffer = await ctx.decodeAudioData(arrayBuffer);

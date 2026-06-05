@@ -8,6 +8,7 @@ import json
 import logging
 import subprocess
 import tempfile
+import threading
 import os
 from pathlib import Path
 from typing import List
@@ -29,6 +30,9 @@ def _find_ffmpeg() -> str:
 # Containers Chromium's <video> can generally play directly.
 _PLAYABLE_SUFFIXES = {".mp4", ".m4v", ".webm"}
 _preview_cache: dict = {}
+_audio_cache: dict = {}
+_preview_lock = threading.Lock()
+_audio_lock = threading.Lock()
 
 
 def _probe_codecs(ffmpeg: str, src: str):
@@ -65,34 +69,73 @@ def get_playable_media(src_path: str) -> str:
     if cached and os.path.exists(cached):
         return cached
 
-    ffmpeg = _find_ffmpeg()
-    vcodec, acodec = _probe_codecs(ffmpeg, str(src))
+    # Serialize generation so concurrent requests (the <video> element issues
+    # several range requests at once) don't run ffmpeg into the same temp file.
+    with _preview_lock:
+        cached = _preview_cache.get(key)
+        if cached and os.path.exists(cached):
+            return cached
 
-    digest = hashlib.md5(key.encode("utf-8")).hexdigest()[:16]
-    out = os.path.join(tempfile.gettempdir(), f"cutscript_preview_{digest}.mp4")
+        ffmpeg = _find_ffmpeg()
+        vcodec, acodec = _probe_codecs(ffmpeg, str(src))
 
-    vargs = ["-c:v", "copy"] if vcodec == "h264" else \
-        ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"]
-    aargs = ["-c:a", "copy"] if acodec == "aac" else ["-c:a", "aac", "-b:a", "160k"]
+        digest = hashlib.md5(key.encode("utf-8")).hexdigest()[:16]
+        out = os.path.join(tempfile.gettempdir(), f"cutscript_preview_{digest}.mp4")
 
-    base = [ffmpeg, "-y", "-i", str(src), "-map", "0:v:0?", "-map", "0:a:0?"]
-    cmd = [*base, *vargs, *aargs, "-movflags", "+faststart", out]
-    logger.info(f"Generating browser-playable preview -> {out}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        # Stream-copy can fail on some H.264-in-Matroska variants; full transcode.
-        logger.warning(f"Preview remux failed, transcoding instead: {result.stderr[-300:]}")
+        vargs = ["-c:v", "copy"] if vcodec == "h264" else \
+            ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"]
+        aargs = ["-c:a", "copy"] if acodec == "aac" else ["-c:a", "aac", "-b:a", "160k"]
+
+        base = [ffmpeg, "-y", "-i", str(src), "-map", "0:v:0?", "-map", "0:a:0?"]
+        cmd = [*base, *vargs, *aargs, "-movflags", "+faststart", out]
+        logger.info(f"Generating browser-playable preview -> {out}")
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            # Stream-copy can fail on some H.264-in-Matroska variants; transcode.
+            logger.warning(f"Preview remux failed, transcoding instead: {result.stderr[-300:]}")
+            cmd = [
+                *base,
+                "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(f"Preview generation failed: {result.stderr[-300:]}")
+
+        _preview_cache[key] = out
+        return out
+
+
+def get_audio_track(src_path: str) -> str:
+    """Extract a clean mono 16 kHz WAV for client-side waveform rendering.
+
+    The browser's decodeAudioData is unreliable on full video containers, so the
+    waveform should decode a plain PCM WAV instead of the video file. Cached.
+    """
+    src = Path(src_path)
+    key = str(src.resolve())
+    cached = _audio_cache.get(key)
+    if cached and os.path.exists(cached):
+        return cached
+
+    with _audio_lock:
+        cached = _audio_cache.get(key)
+        if cached and os.path.exists(cached):
+            return cached
+
+        ffmpeg = _find_ffmpeg()
+        digest = hashlib.md5(key.encode("utf-8")).hexdigest()[:16]
+        out = os.path.join(tempfile.gettempdir(), f"cutscript_audio_{digest}.wav")
         cmd = [
-            *base,
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out,
+            ffmpeg, "-y", "-i", str(src),
+            "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", out,
         ]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
-            raise RuntimeError(f"Preview generation failed: {result.stderr[-300:]}")
+            raise RuntimeError(f"Audio extraction failed: {result.stderr[-300:]}")
 
-    _preview_cache[key] = out
-    return out
+        _audio_cache[key] = out
+        return out
 
 
 def export_stream_copy(
