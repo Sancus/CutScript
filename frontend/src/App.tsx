@@ -38,15 +38,52 @@ export default function App() {
   const [activePanel, setActivePanel] = useState<Panel>(null);
   const [manualPath, setManualPath] = useState('');
   const [whisperModel, setWhisperModel] = useState('base');
+  const [backendReady, setBackendReady] = useState(!IS_ELECTRON);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useKeyboardShortcuts();
 
   useEffect(() => {
-    if (IS_ELECTRON) {
-      window.electronAPI!.getBackendUrl().then(setBackendUrl);
-    }
+    if (!IS_ELECTRON) return;
+    let cancelled = false;
+    window.electronAPI!.getBackendUrl().then((url) => {
+      setBackendUrl(url);
+      const poll = async () => {
+        while (!cancelled) {
+          try {
+            const r = await fetch(`${url}/health`);
+            if (r.ok) {
+              if (!cancelled) setBackendReady(true);
+              return;
+            }
+          } catch {
+            // backend not up yet; keep polling
+          }
+          await new Promise((res) => setTimeout(res, 700));
+        }
+      };
+      poll();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [setBackendUrl]);
+
+  // Resolve once the backend answers /health, so transcription started right
+  // after launch waits for the engine instead of failing with a refused fetch.
+  const waitForBackend = async (timeoutMs = 120000): Promise<boolean> => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const r = await fetch(`${backendUrl}/health`);
+        if (r.ok) return true;
+      } catch {
+        // not ready yet
+      }
+      await new Promise((res) => setTimeout(res, 700));
+    }
+    return false;
+  };
 
   const handleLoadProject = async () => {
     if (!IS_ELECTRON) return;
@@ -90,6 +127,12 @@ export default function App() {
   const transcribeVideo = async (path: string) => {
     setTranscribing(true, 0);
     try {
+      const ready = await waitForBackend();
+      if (!ready) {
+        throw new Error(
+          'The transcription engine did not start in time. Check %APPDATA%\\CutScript\\backend.log.',
+        );
+      }
       const res = await fetch(`${backendUrl}/transcribe`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -140,18 +183,33 @@ export default function App() {
           <div className="flex flex-col items-center gap-3">
             <button
               onClick={handleOpenFile}
-              className="flex items-center gap-2 px-6 py-3 bg-editor-accent hover:bg-editor-accent-hover rounded-lg text-white font-medium transition-colors"
+              disabled={!backendReady}
+              className="flex items-center gap-2 px-6 py-3 bg-editor-accent hover:bg-editor-accent-hover disabled:opacity-40 disabled:cursor-not-allowed rounded-lg text-white font-medium transition-colors"
             >
               <FolderOpen className="w-5 h-5" />
               Open Video File
             </button>
             <button
               onClick={handleLoadProject}
-              className="flex items-center gap-2 px-4 py-2 text-sm text-editor-text-muted hover:text-editor-text hover:bg-editor-surface rounded-lg transition-colors"
+              disabled={!backendReady}
+              className="flex items-center gap-2 px-4 py-2 text-sm text-editor-text-muted hover:text-editor-text hover:bg-editor-surface disabled:opacity-40 disabled:cursor-not-allowed rounded-lg transition-colors"
             >
               <FileInput className="w-4 h-4" />
               Load Project (.aive)
             </button>
+            <div className="flex items-center gap-2 text-xs h-4">
+              {backendReady ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-green-500" />
+                  <span className="text-editor-text-muted">Transcription engine ready</span>
+                </>
+              ) : (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 text-editor-accent animate-spin" />
+                  <span className="text-editor-text-muted">Starting transcription engine…</span>
+                </>
+              )}
+            </div>
           </div>
         ) : (
           /* Browser: manual path input */

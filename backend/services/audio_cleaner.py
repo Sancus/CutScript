@@ -3,18 +3,13 @@ Audio noise reduction using DeepFilterNet.
 Falls back to a basic FFmpeg noise filter if DeepFilterNet is not installed.
 """
 
+import importlib.util
 import logging
 import subprocess
 import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
-
-try:
-    from df.enhance import enhance, init_df, load_audio, save_audio
-    DEEPFILTER_AVAILABLE = True
-except ImportError:
-    DEEPFILTER_AVAILABLE = False
 
 
 _df_model = None
@@ -25,6 +20,9 @@ def _init_deepfilter():
     global _df_model, _df_state
     if _df_model is None:
         logger.info("Initializing DeepFilterNet model")
+        # Imported lazily: DeepFilterNet pulls in torch, which we don't want to
+        # load at backend startup (only when audio cleanup is actually used).
+        from df.enhance import init_df
         _df_model, _df_state, _ = init_df()
     return _df_model, _df_state
 
@@ -45,13 +43,14 @@ def clean_audio(
     if not output_path:
         output_path = str(input_path.with_stem(input_path.stem + "_clean"))
 
-    if DEEPFILTER_AVAILABLE:
+    if is_deepfilter_available():
         return _clean_with_deepfilter(str(input_path), output_path)
     else:
         return _clean_with_ffmpeg(str(input_path), output_path)
 
 
 def _clean_with_deepfilter(input_path: str, output_path: str) -> str:
+    from df.enhance import enhance, load_audio, save_audio
     model, state = _init_deepfilter()
     audio, info = load_audio(input_path, sr=state.sr())
     enhanced = enhance(model, state, audio)
@@ -76,4 +75,5 @@ def _clean_with_ffmpeg(input_path: str, output_path: str) -> str:
 
 
 def is_deepfilter_available() -> bool:
-    return DEEPFILTER_AVAILABLE
+    # Check availability without importing df (which would load torch).
+    return importlib.util.find_spec("df") is not None

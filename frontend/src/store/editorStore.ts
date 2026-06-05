@@ -61,7 +61,7 @@ const initialState: EditorState = {
   transcriptionProgress: 0,
   isExporting: false,
   exportProgress: 0,
-  backendUrl: 'http://localhost:8642',
+  backendUrl: 'http://127.0.0.1:8642',
 };
 
 let nextRangeId = 1;

@@ -6,9 +6,6 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from services.transcription import transcribe_audio
-from services.diarization import diarize_and_label
-
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
@@ -27,6 +24,11 @@ class TranscribeRequest(BaseModel):
 @router.post("/transcribe")
 async def transcribe(req: TranscribeRequest):
     try:
+        # Imported lazily so the backend boots fast: the heavy ML stack
+        # (torch/whisperx/pyannote) only loads on the first transcription.
+        from services.transcription import transcribe_audio
+        from services.diarization import diarize_and_label
+
         result = transcribe_audio(
             file_path=req.file_path,
             model_name=req.model,
