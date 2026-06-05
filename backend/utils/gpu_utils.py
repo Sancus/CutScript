@@ -20,7 +20,9 @@ if not getattr(torch.load, "_cutscript_compat", False):
     _orig_torch_load = torch.load
 
     def _torch_load_compat(*args, **kwargs):
-        kwargs.setdefault("weights_only", False)
+        # Force (not setdefault): lightning_fabric/pyannote pass weights_only=True
+        # explicitly, so a default wouldn't take effect.
+        kwargs["weights_only"] = False
         return _orig_torch_load(*args, **kwargs)
 
     _torch_load_compat._cutscript_compat = True
