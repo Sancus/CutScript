@@ -86,6 +86,7 @@ COLLECT_PACKAGES = [
     "moviepy",
     "imageio",
     "imageio_ffmpeg",
+    "matplotlib",
     "nltk",
     "julius",
     "omegaconf",
@@ -216,7 +217,6 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[
         "tkinter",
-        "matplotlib",
         "PyQt5",
         "PyQt6",
         "PySide2",

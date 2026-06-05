@@ -13,6 +13,11 @@ import argparse
 import os
 import sys
 
+# torchmetrics (pulled in via whisperx -> pyannote -> pytorch_lightning) imports
+# matplotlib at import time. Force the headless Agg backend so it never tries to
+# load a GUI backend (tkinter/Qt) that isn't bundled.
+os.environ.setdefault("MPLBACKEND", "Agg")
+
 
 def _ensure_importable() -> None:
     """Make the backend package modules importable regardless of CWD.
