@@ -11,6 +11,22 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# whisperx/pyannote model checkpoints embed omegaconf objects. PyTorch 2.6+
+# changed torch.load to default weights_only=True, which rejects them with
+# "Unsupported global: omegaconf.listconfig.ListConfig". These models come from
+# trusted repos (HuggingFace), so restore the permissive load behavior once,
+# process-wide. Guarded so repeated imports don't double-wrap.
+if not getattr(torch.load, "_cutscript_compat", False):
+    _orig_torch_load = torch.load
+
+    def _torch_load_compat(*args, **kwargs):
+        kwargs.setdefault("weights_only", False)
+        return _orig_torch_load(*args, **kwargs)
+
+    _torch_load_compat._cutscript_compat = True
+    torch.load = _torch_load_compat
+
+
 def get_gpu_info():
     """
     Get information about available GPUs.
