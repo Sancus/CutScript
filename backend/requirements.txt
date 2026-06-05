@@ -14,8 +14,12 @@ ffmpeg-python>=0.2.0
 soundfile>=0.10.3
 
 # ML / GPU
-torch>=2.0.0
-torchaudio>=2.0.0
+# Pinned to 2.7.1: this is the version that has BOTH torch.float8_e8m0fnu
+# (required by current transformers) AND torchaudio.AudioMetaData (required by
+# pyannote.audio 3.3.2). Newer torch (>=2.8) removed AudioMetaData; older (<2.7)
+# lacks float8_e8m0fnu.
+torch==2.7.1
+torchaudio==2.7.1
 numpy>=1.24.0
 
 # Speaker diarization

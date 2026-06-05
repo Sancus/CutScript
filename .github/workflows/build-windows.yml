@@ -76,7 +76,7 @@ jobs:
 
           if ($env:CUDA_ENABLED -eq 'true') {
             Write-Host "Installing CUDA-enabled PyTorch from $env:TORCH_CUDA_INDEX"
-            pip install --no-cache-dir torch torchaudio --index-url $env:TORCH_CUDA_INDEX
+            pip install --no-cache-dir torch==2.7.1 torchaudio==2.7.1 --index-url $env:TORCH_CUDA_INDEX
           }
 
           pip install --no-cache-dir -r requirements.txt
@@ -84,7 +84,7 @@ jobs:
 
           if ($env:CUDA_ENABLED -eq 'true') {
             # Ensure the CUDA build wins even if a dependency pulled the CPU wheel.
-            pip install --no-cache-dir --force-reinstall --no-deps torch torchaudio --index-url $env:TORCH_CUDA_INDEX
+            pip install --no-cache-dir --force-reinstall --no-deps torch==2.7.1 torchaudio==2.7.1 --index-url $env:TORCH_CUDA_INDEX
           }
 
           python -c "import torch; print('torch', torch.__version__, 'cuda build:', torch.version.cuda)"
