@@ -3,6 +3,8 @@ FFmpeg-based video cutting engine.
 Uses stream copy for fast, lossless cuts and falls back to re-encode when needed.
 """
 
+import hashlib
+import json
 import logging
 import subprocess
 import tempfile
@@ -22,6 +24,75 @@ def _find_ffmpeg() -> str:
         except (FileNotFoundError, subprocess.CalledProcessError):
             continue
     raise RuntimeError("FFmpeg not found. Install it or add it to PATH.")
+
+
+# Containers Chromium's <video> can generally play directly.
+_PLAYABLE_SUFFIXES = {".mp4", ".m4v", ".webm"}
+_preview_cache: dict = {}
+
+
+def _probe_codecs(ffmpeg: str, src: str):
+    ffprobe = ffmpeg.replace("ffmpeg", "ffprobe")
+    vcodec = acodec = ""
+    try:
+        out = subprocess.run(
+            [ffprobe, "-v", "quiet", "-print_format", "json", "-show_streams", src],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        for s in json.loads(out).get("streams", []):
+            if s.get("codec_type") == "video" and not vcodec:
+                vcodec = s.get("codec_name", "")
+            elif s.get("codec_type") == "audio" and not acodec:
+                acodec = s.get("codec_name", "")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(f"ffprobe failed for {src}: {exc}")
+    return vcodec, acodec
+
+
+def get_playable_media(src_path: str) -> str:
+    """Return a path to a browser-playable (MP4/H.264/AAC) version of `src_path`.
+
+    Chromium's <video> can't render many containers (e.g. Matroska .mkv). We
+    remux instantly when the video is already H.264, otherwise transcode, and
+    cache the result so it's produced at most once per source.
+    """
+    src = Path(src_path)
+    if src.suffix.lower() in _PLAYABLE_SUFFIXES:
+        return str(src)
+
+    key = str(src.resolve())
+    cached = _preview_cache.get(key)
+    if cached and os.path.exists(cached):
+        return cached
+
+    ffmpeg = _find_ffmpeg()
+    vcodec, acodec = _probe_codecs(ffmpeg, str(src))
+
+    digest = hashlib.md5(key.encode("utf-8")).hexdigest()[:16]
+    out = os.path.join(tempfile.gettempdir(), f"cutscript_preview_{digest}.mp4")
+
+    vargs = ["-c:v", "copy"] if vcodec == "h264" else \
+        ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p"]
+    aargs = ["-c:a", "copy"] if acodec == "aac" else ["-c:a", "aac", "-b:a", "160k"]
+
+    base = [ffmpeg, "-y", "-i", str(src), "-map", "0:v:0?", "-map", "0:a:0?"]
+    cmd = [*base, *vargs, *aargs, "-movflags", "+faststart", out]
+    logger.info(f"Generating browser-playable preview -> {out}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        # Stream-copy can fail on some H.264-in-Matroska variants; full transcode.
+        logger.warning(f"Preview remux failed, transcoding instead: {result.stderr[-300:]}")
+        cmd = [
+            *base,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", out,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"Preview generation failed: {result.stderr[-300:]}")
+
+    _preview_cache[key] = out
+    return out
 
 
 def export_stream_copy(

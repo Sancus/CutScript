@@ -39,6 +39,10 @@ interface EditorActions {
   restoreRange: (rangeId: string) => void;
   setTranscribing: (active: boolean, progress?: number) => void;
   setExporting: (active: boolean, progress?: number) => void;
+  removeSilences: (thresholdSec?: number, paddingSec?: number) => number;
+  clearSilences: () => void;
+  getSilenceCount: () => number;
+  addTimeCut: (start: number, end: number) => void;
   getKeepSegments: () => Array<{ start: number; end: number }>;
   getWordAtTime: (time: number) => number;
   loadProject: (projectData: any) => void;
@@ -75,7 +79,9 @@ export const useEditorStore = create<EditorState & EditorActions>()(
 
       loadVideo: (path) => {
         const backend = get().backendUrl;
-        const url = `${backend}/file?path=${encodeURIComponent(path)}`;
+        // /preview returns a browser-playable MP4 (remuxed/transcoded as needed)
+        // since Chromium can't render many containers (e.g. .mkv) directly.
+        const url = `${backend}/preview?path=${encodeURIComponent(path)}`;
         set({
           ...initialState,
           backendUrl: backend,
@@ -159,34 +165,82 @@ export const useEditorStore = create<EditorState & EditorActions>()(
           exportProgress: progress ?? (active ? 0 : 100),
         }),
 
+      // Silence cuts are modelled as deleted ranges with no associated words
+      // (empty wordIndices), so they coexist with manual word deletions and are
+      // skipped on playback / drawn on the waveform like any other cut.
+      removeSilences: (thresholdSec = 0.5, paddingSec = 0.1) => {
+        const { words, deletedRanges, duration } = get();
+        if (words.length === 0) return 0;
+
+        const manual = deletedRanges.filter((r) => r.wordIndices.length > 0);
+        const silences: DeletedRange[] = [];
+        const addSilence = (start: number, end: number) => {
+          const s = start + paddingSec;
+          const e = end - paddingSec;
+          if (e - s > 0.05) {
+            silences.push({ id: `sil_${nextRangeId++}`, start: s, end: e, wordIndices: [] });
+          }
+        };
+
+        if (words[0].start > thresholdSec) addSilence(0, words[0].start);
+        for (let i = 0; i < words.length - 1; i++) {
+          const gap = words[i + 1].start - words[i].end;
+          if (gap > thresholdSec) addSilence(words[i].end, words[i + 1].start);
+        }
+        const lastEnd = words[words.length - 1].end;
+        if (duration > 0 && duration - lastEnd > thresholdSec) addSilence(lastEnd, duration);
+
+        set({ deletedRanges: [...manual, ...silences], selectedWordIndices: [] });
+        return silences.length;
+      },
+
+      clearSilences: () => {
+        const { deletedRanges } = get();
+        set({ deletedRanges: deletedRanges.filter((r) => r.wordIndices.length > 0) });
+      },
+
+      getSilenceCount: () => get().deletedRanges.filter((r) => r.wordIndices.length === 0).length,
+
+      // A time-based cut (e.g. drag-selected on the timeline); no associated words.
+      addTimeCut: (start, end) => {
+        const lo = Math.min(start, end);
+        const hi = Math.max(start, end);
+        if (hi - lo <= 0.02) return;
+        const { deletedRanges } = get();
+        set({
+          deletedRanges: [
+            ...deletedRanges,
+            { id: `tc_${nextRangeId++}`, start: lo, end: hi, wordIndices: [] },
+          ],
+        });
+      },
+
       getKeepSegments: () => {
         const { words, deletedRanges, duration } = get();
         if (words.length === 0) return [{ start: 0, end: duration }];
 
-        const deletedSet = new Set<number>();
-        for (const range of deletedRanges) {
-          for (const idx of range.wordIndices) deletedSet.add(idx);
-        }
+        const spanStart = words[0].start;
+        const spanEnd = words[words.length - 1].end;
+
+        // Subtract every cut (word deletions AND silences) from the span by time,
+        // merging overlaps so adjacent cuts collapse cleanly.
+        const cuts = deletedRanges
+          .map((r) => ({ start: r.start, end: r.end }))
+          .filter((c) => c.end > c.start)
+          .sort((a, b) => a.start - b.start);
 
         const segments: Array<{ start: number; end: number }> = [];
-        let segStart: number | null = null;
-
-        for (let i = 0; i < words.length; i++) {
-          if (!deletedSet.has(i)) {
-            if (segStart === null) segStart = words[i].start;
-          } else {
-            if (segStart !== null) {
-              segments.push({ start: segStart, end: words[i - 1].end });
-              segStart = null;
-            }
-          }
+        let cursor = spanStart;
+        for (const cut of cuts) {
+          const cs = Math.max(cut.start, spanStart);
+          const ce = Math.min(cut.end, spanEnd);
+          if (ce <= cursor) continue;
+          if (cs > cursor) segments.push({ start: cursor, end: cs });
+          cursor = Math.max(cursor, ce);
         }
+        if (cursor < spanEnd) segments.push({ start: cursor, end: spanEnd });
 
-        if (segStart !== null) {
-          segments.push({ start: segStart, end: words[words.length - 1].end });
-        }
-
-        return segments;
+        return segments.filter((s) => s.end - s.start > 0.01);
       },
 
       getWordAtTime: (time) => {
@@ -204,7 +258,7 @@ export const useEditorStore = create<EditorState & EditorActions>()(
 
       loadProject: (data) => {
         const backend = get().backendUrl;
-        const url = `${backend}/file?path=${encodeURIComponent(data.videoPath)}`;
+        const url = `${backend}/preview?path=${encodeURIComponent(data.videoPath)}`;
 
         let globalIdx = 0;
         const annotatedSegments = (data.segments || []).map((seg: Segment) => {

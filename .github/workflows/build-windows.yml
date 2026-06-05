@@ -179,6 +179,17 @@ jobs:
             }
             $text = ($resp.words | ForEach-Object { $_.word }) -join ' '
             Write-Host "PASS: end-to-end transcription ran ($($resp.words.Count) words): $text"
+
+            # 4) /preview must turn a non-MP4 container (.mkv) into a playable MP4.
+            $mkv = Join-Path $env:RUNNER_TEMP "smoke.mkv"
+            ffmpeg -y -f lavfi -i "testsrc=size=320x240:rate=10:duration=2" -f lavfi -i "sine=frequency=440:duration=2" -c:v libx264 -c:a aac -shortest "$mkv" | Out-Null
+            if (-not (Test-Path $mkv)) { throw "failed to generate test mkv" }
+            $enc = [uri]::EscapeDataString($mkv)
+            $pvOut = Join-Path $env:RUNNER_TEMP "preview.mp4"
+            Invoke-WebRequest "http://127.0.0.1:8642/preview?path=$enc" -OutFile $pvOut -TimeoutSec 180
+            $sz = (Get-Item $pvOut).Length
+            if ($sz -lt 1000) { throw "/preview produced too little data ($sz bytes)" }
+            Write-Host "PASS: /preview produced playable mp4 ($sz bytes)"
           }
           finally {
             if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }

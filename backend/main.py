@@ -85,13 +85,8 @@ MIME_MAP = {
 }
 
 
-@app.get("/file")
-async def serve_local_file(request: Request, path: str = Query(...)):
+def _stream_file(request: Request, file_path: Path) -> StreamingResponse:
     """Stream a local file with HTTP Range support (required for video seeking)."""
-    file_path = Path(path)
-    if not file_path.is_file():
-        raise HTTPException(status_code=404, detail=f"File not found: {path}")
-
     file_size = file_path.stat().st_size
     content_type = MIME_MAP.get(file_path.suffix.lower(), "application/octet-stream")
 
@@ -139,6 +134,37 @@ async def serve_local_file(request: Request, path: str = Query(...)):
             "Content-Length": str(file_size),
         },
     )
+
+
+@app.get("/file")
+async def serve_local_file(request: Request, path: str = Query(...)):
+    """Stream a local file as-is (used for downloads / already-playable media)."""
+    file_path = Path(path)
+    if not file_path.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    return _stream_file(request, file_path)
+
+
+@app.get("/preview")
+async def serve_preview(request: Request, path: str = Query(...)):
+    """Serve a browser-playable version of the media.
+
+    Chromium's <video> can't render many containers/codecs (e.g. Matroska
+    .mkv). This returns an MP4 (H.264/AAC) — remuxed instantly when the video
+    is already H.264, otherwise transcoded — cached so it only happens once.
+    """
+    src = Path(path)
+    if not src.is_file():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+
+    try:
+        from services.video_editor import get_playable_media
+        playable = Path(get_playable_media(path))
+    except Exception as exc:  # noqa: BLE001
+        logger.error(f"Preview generation failed, serving original: {exc}", exc_info=True)
+        playable = src
+
+    return _stream_file(request, playable)
 
 
 @app.get("/health")
