@@ -222,12 +222,20 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win --x64 --publish never
+        run: |
+          # The CUDA bundle is multi-GB; NSIS's 32-bit makensis can't mmap the
+          # >2GB app archive (ERR cannot create mmap). Ship CUDA as a zip; keep
+          # the smaller CPU build as a proper NSIS installer.
+          $target = if ($env:CUDA_ENABLED -eq 'true') { 'zip' } else { 'nsis' }
+          Write-Host "electron-builder target: $target"
+          npx electron-builder --win $target --x64 --publish never
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: CutScript-Windows-Installer
-          path: dist/*.exe
+          name: CutScript-Windows-${{ env.CUDA_ENABLED == 'true' && 'cuda' || 'cpu' }}
+          path: |
+            dist/*.exe
+            dist/*.zip
           if-no-files-found: error
           retention-days: 14
