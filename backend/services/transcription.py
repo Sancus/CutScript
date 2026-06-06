@@ -96,10 +96,15 @@ def _load_model(model_name: str, device: torch.device):
 
     logger.info(f"Loading model: {model_name} on {device}")
     if WHISPERX_AVAILABLE:
-        compute_type = "float16" if device.type == "cuda" else "int8"
+        # CTranslate2 expects device "cuda"/"cpu" with a SEPARATE device_index,
+        # not a torch-style "cuda:0" string (which it rejects).
+        device_type = device.type
+        device_index = device.index if device.index is not None else 0
+        compute_type = "float16" if device_type == "cuda" else "int8"
         model = whisperx.load_model(
             model_name,
-            device=str(device),
+            device=device_type,
+            device_index=device_index,
             compute_type=compute_type,
         )
     else:
