@@ -211,6 +211,27 @@ jobs:
             Write-Host "----- backend stderr -----"; Get-Content $err -Tail 60 -ErrorAction SilentlyContinue
           }
 
+      - name: Trim CUDA bundle (safe) and report sizes
+        if: env.CUDA_ENABLED == 'true'
+        shell: pwsh
+        run: |
+          $dist = "backend/dist/cutscript-backend"
+          $before = (Get-ChildItem $dist -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host ("Before trim: {0:N0} MB" -f ($before/1MB))
+
+          # Safe removals only: import libs, debug symbols, caches, test dirs,
+          # and the CUDA profiler (cupti) which isn't needed for inference.
+          Get-ChildItem $dist -Recurse -File -Include *.lib,*.pdb,*.exp -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+          Get-ChildItem $dist -Recurse -Directory -Include __pycache__,tests,test -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem $dist -Recurse -File -Include cupti*.dll,*nvperf*.dll -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+
+          $after = (Get-ChildItem $dist -Recurse -File | Measure-Object Length -Sum).Sum
+          Write-Host ("After trim:  {0:N0} MB" -f ($after/1MB))
+          Write-Host "=== 30 largest remaining files ==="
+          Get-ChildItem $dist -Recurse -File | Sort-Object Length -Descending | Select-Object -First 30 | ForEach-Object {
+            "{0,9:N1} MB  {1}" -f ($_.Length/1MB), $_.FullName.Substring((Resolve-Path $dist).Path.Length)
+          }
+
       - name: Build frontend
         shell: pwsh
         working-directory: frontend
@@ -228,11 +249,13 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # The CUDA bundle is multi-GB; NSIS's 32-bit makensis can't mmap the
-          # >2GB app archive (ERR cannot create mmap). Ship CUDA as a zip; keep
-          # the smaller CPU build as a proper NSIS installer.
-          $target = if ($env:CUDA_ENABLED -eq 'true') { 'zip' } else { 'nsis' }
+          # >2GB app archive. Ship CUDA as a 7z (best compression, aiming to fit
+          # under GitHub's 2GiB release-asset limit); CPU stays an NSIS installer.
+          $target = if ($env:CUDA_ENABLED -eq 'true') { '7z' } else { 'nsis' }
           Write-Host "electron-builder target: $target"
           npx electron-builder --win $target --x64 --publish never
+          Write-Host "=== dist artifacts ==="
+          Get-ChildItem dist -File | ForEach-Object { "{0,9:N1} MB  {1}" -f ($_.Length/1MB), $_.Name }
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
@@ -241,6 +264,7 @@ jobs:
           path: |
             dist/*.exe
             dist/*.zip
+            dist/*.7z
           if-no-files-found: error
           retention-days: 14
 
@@ -252,4 +276,5 @@ jobs:
           files: |
             dist/*.exe
             dist/*.zip
+            dist/*.7z
           fail_on_unmatched_files: false
