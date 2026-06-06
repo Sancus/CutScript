@@ -15,7 +15,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: build-windows-${{ github.ref }}
+  # Include the event so a manual CUDA dispatch isn't cancelled by a push CI run.
+  group: build-windows-${{ github.ref }}-${{ github.event_name }}
   cancel-in-progress: true
 
 jobs:
