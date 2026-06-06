@@ -163,7 +163,23 @@ def _transcribe_whisperx(model, audio_path: str, device: torch.device, language:
     if language:
         transcribe_opts["language"] = language
 
-    result = model.transcribe(audio, batch_size=16, **transcribe_opts)
+    # WhisperX raises IndexError when its VAD finds no speech ("No active speech
+    # found in audio"). Treat that (and an empty result) as an empty transcript
+    # rather than a 500.
+    try:
+        result = model.transcribe(audio, batch_size=16, **transcribe_opts)
+    except IndexError:
+        logger.warning("No speech detected in audio; returning empty transcript")
+        return {"words": [], "segments": [], "language": language or "en"}
+
+    if not result or not result.get("segments"):
+        logger.info("Transcription produced no segments (no speech)")
+        return {
+            "words": [],
+            "segments": [],
+            "language": (result or {}).get("language") or language or "en",
+        }
+
     detected_language = result.get("language", "en")
 
     align_model, align_metadata = whisperx.load_align_model(

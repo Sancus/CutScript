@@ -272,6 +272,18 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+      # Small (~100MB) backend-only artifact for quick patching: our Python code
+      # lives in cutscript-backend.exe (PyInstaller PYZ); the multi-GB CUDA libs
+      # in _internal don't change between code fixes, so swapping just this exe
+      # applies code-only fixes without re-downloading the whole archive.
+      - name: Upload backend exe (quick patch)
+        uses: actions/upload-artifact@v4
+        with:
+          name: CutScript-Windows-backend-exe-${{ env.CUDA_ENABLED == 'true' && 'cuda' || 'cpu' }}
+          path: backend/dist/cutscript-backend/cutscript-backend.exe
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Publish to GitHub Release
         if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != '' }}
         uses: softprops/action-gh-release@v2
