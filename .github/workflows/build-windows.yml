@@ -90,6 +90,10 @@ jobs:
           if ($env:CUDA_ENABLED -eq 'true') {
             # Ensure the CUDA build wins even if a dependency pulled the CPU wheel.
             pip install --no-cache-dir --force-reinstall --no-deps torch==2.7.1 torchaudio==2.7.1 --index-url $env:TORCH_CUDA_INDEX
+            # whisperx pins ctranslate2<4.5 (cuDNN 8); force the cuDNN 9 build to
+            # match torch cu126, else GPU fails with "cudnn_ops_infer64_8.dll not found".
+            pip install --no-cache-dir --force-reinstall --no-deps "ctranslate2>=4.5.0"
+            python -c "import importlib.metadata as m; print('ctranslate2', m.version('ctranslate2'))"
           }
 
           python -c "import torch; print('torch', torch.__version__, 'cuda build:', torch.version.cuda)"

@@ -7,6 +7,8 @@ python-multipart>=0.0.12
 # Transcription (WhisperX for word-level alignment)
 whisperx>=3.1.0
 faster-whisper>=1.0.0
+# NOTE: whisperx pins ctranslate2<4.5 (cuDNN 8). The CUDA build force-upgrades
+# ctranslate2 to >=4.5 (cuDNN 9) to match torch cu126 — see build-windows.yml.
 
 # Audio / Video processing
 moviepy>=1.0.3

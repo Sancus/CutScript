@@ -25,6 +25,18 @@ if getattr(sys, "frozen", False):
     _exe_dir = os.path.dirname(sys.executable)
     os.environ["PATH"] = _exe_dir + os.pathsep + os.environ.get("PATH", "")
 
+    # Make torch's bundled CUDA libraries (cuBLAS / cuDNN 9) discoverable so
+    # CTranslate2 (>=4.5) can load cuDNN on Windows GPU builds. torch normally
+    # registers this on import, but add it explicitly to be safe.
+    if sys.platform == "win32":
+        _torch_lib = os.path.join(_exe_dir, "_internal", "torch", "lib")
+        if os.path.isdir(_torch_lib):
+            try:
+                os.add_dll_directory(_torch_lib)
+            except Exception:
+                pass
+            os.environ["PATH"] = _torch_lib + os.pathsep + os.environ.get("PATH", "")
+
 
 def _ensure_importable() -> None:
     """Make the backend package modules importable regardless of CWD.
