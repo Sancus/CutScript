@@ -59,7 +59,13 @@
       "deleteAppDataOnUninstall": false
     },
     "mac": {
-      "target": "dmg"
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64"]
+        }
+      ],
+      "identity": null
     },
     "linux": {
       "target": "AppImage"

@@ -1,0 +1,151 @@
+name: Build macOS
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-macos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-macos:
+    runs-on: macos-latest # Apple Silicon (arm64)
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install backend dependencies
+        shell: bash
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install "setuptools<81" wheel
+          # macOS has no CUDA; the requirements pin torch==2.7.1, which on Apple
+          # Silicon installs the arm64 build with MPS (Metal) acceleration.
+          pip install --no-cache-dir -r requirements.txt
+          pip install --no-cache-dir pyinstaller
+          python -c "import torch; print('torch', torch.__version__, 'mps:', torch.backends.mps.is_available())"
+
+      - name: Bundle backend with PyInstaller
+        shell: bash
+        working-directory: backend
+        run: |
+          pyinstaller --noconfirm --clean cutscript-backend.spec
+          test -f dist/cutscript-backend/cutscript-backend || { echo "backend bundle missing"; exit 1; }
+
+      - name: Download FFmpeg (arm64)
+        shell: bash
+        run: |
+          set -e
+          mkdir -p build/ffmpeg
+          for tool in ffmpeg ffprobe; do
+            curl -L -o "$tool.zip" "https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/$tool.zip"
+            unzip -o "$tool.zip" -d build/ffmpeg
+          done
+          chmod +x build/ffmpeg/ffmpeg build/ffmpeg/ffprobe
+          xattr -dr com.apple.quarantine build/ffmpeg || true
+          # Ship ffmpeg next to the backend binary (run_server prepends its dir to PATH).
+          cp build/ffmpeg/ffmpeg build/ffmpeg/ffprobe backend/dist/cutscript-backend/
+          ls -la build/ffmpeg
+
+      - name: Smoke-test bundled backend (engine imports + transcription)
+        shell: bash
+        run: |
+          set -e
+          export PATH="$(pwd)/build/ffmpeg:$PATH"
+          EXE="backend/dist/cutscript-backend/cutscript-backend"
+          "$EXE" --host 127.0.0.1 --port 8642 > "$RUNNER_TEMP/be_out.txt" 2>&1 &
+          BE_PID=$!
+          cleanup() { kill "$BE_PID" 2>/dev/null || true; echo "----- backend log -----"; tail -n 60 "$RUNNER_TEMP/be_out.txt" || true; }
+          trap cleanup EXIT
+
+          # 1) liveness
+          healthy=0
+          for i in $(seq 1 60); do
+            if curl -fs "http://127.0.0.1:8642/health" >/dev/null 2>&1; then healthy=1; break; fi
+            sleep 2
+          done
+          [ "$healthy" = "1" ] || { echo "backend did not become healthy"; exit 1; }
+
+          # 2) engine must import (catches missing bundled deps)
+          ready=0
+          for i in $(seq 1 180); do
+            state=$(curl -fs "http://127.0.0.1:8642/ready" | python3 -c "import sys,json;print(json.load(sys.stdin).get('state',''))" 2>/dev/null || echo "")
+            echo "engine state: $state"
+            if [ "$state" = "ready" ]; then ready=1; break; fi
+            if [ "$state" = "error" ]; then
+              curl -fs "http://127.0.0.1:8642/ready"; echo; echo "ENGINE IMPORT FAILED"; exit 1
+            fi
+            sleep 3
+          done
+          [ "$ready" = "1" ] || { echo "engine did not become ready in time"; exit 1; }
+          echo "PASS: transcription engine imported"
+
+          # 3) real end-to-end transcription on actual speech (macOS 'say' TTS)
+          WAV="$RUNNER_TEMP/smoke.aiff"
+          say -o "$WAV" "The quick brown fox jumps over the lazy dog. Testing one two three four."
+          test -f "$WAV" || { echo "failed to generate test audio"; exit 1; }
+          BODY=$(python3 -c "import json,sys;print(json.dumps({'file_path':sys.argv[1],'model':'tiny','language':'en','use_cache':False}))" "$WAV")
+          RESP=$(curl -fs -X POST "http://127.0.0.1:8642/transcribe" -H "Content-Type: application/json" -d "$BODY" --max-time 900)
+          NWORDS=$(echo "$RESP" | python3 -c "import sys,json;d=json.load(sys.stdin);print(len(d.get('words',[])))")
+          [ "$NWORDS" -ge 1 ] || { echo "transcription produced no words: $RESP"; exit 1; }
+          echo "PASS: end-to-end transcription ran ($NWORDS words)"
+
+          # 4) /preview must turn a non-MP4 container into a playable MP4 with audio
+          MKV="$RUNNER_TEMP/smoke.mkv"
+          ffmpeg -y -f lavfi -i "testsrc=size=320x240:rate=10:duration=2" -f lavfi -i "sine=frequency=440:duration=2" -c:v libx264 -c:a aac -shortest "$MKV"
+          ENC=$(python3 -c "import urllib.parse,sys;print(urllib.parse.quote(sys.argv[1]))" "$MKV")
+          curl -fs "http://127.0.0.1:8642/preview?path=$ENC" -o "$RUNNER_TEMP/preview.mp4" --max-time 180
+          PSZ=$(stat -f%z "$RUNNER_TEMP/preview.mp4")
+          [ "$PSZ" -ge 1000 ] || { echo "/preview produced too little data ($PSZ)"; exit 1; }
+          PAUDIO=$(ffprobe -v error -select_streams a -show_entries stream=codec_name -of csv=p=0 "$RUNNER_TEMP/preview.mp4")
+          [ -n "$PAUDIO" ] || { echo "/preview has NO audio stream"; exit 1; }
+          echo "PASS: /preview produced playable mp4 ($PSZ bytes, audio=$PAUDIO)"
+
+          # 5) /audio must extract a decodable WAV
+          curl -fs "http://127.0.0.1:8642/audio?path=$ENC" -o "$RUNNER_TEMP/audio.wav" --max-time 120
+          ASZ=$(stat -f%z "$RUNNER_TEMP/audio.wav")
+          [ "$ASZ" -ge 1000 ] || { echo "/audio produced too little data ($ASZ)"; exit 1; }
+          echo "PASS: /audio extracted wav ($ASZ bytes)"
+
+      - name: Build frontend
+        shell: bash
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install root dependencies
+        shell: bash
+        run: npm install
+
+      - name: Build macOS installer (electron-builder)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --mac --arm64 --publish never
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: CutScript-macOS-arm64
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 14
