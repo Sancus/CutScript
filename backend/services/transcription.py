@@ -80,7 +80,12 @@ except Exception:
 
 def _get_device(use_gpu: bool = True) -> torch.device:
     if use_gpu:
-        return get_optimal_device()
+        device = get_optimal_device()
+        # CTranslate2 (faster-whisper/WhisperX) supports only CPU and CUDA, not
+        # Apple's MPS. On Apple Silicon, fall back to CPU for transcription.
+        if device.type == "mps":
+            return torch.device("cpu")
+        return device
     return torch.device("cpu")
 
 
