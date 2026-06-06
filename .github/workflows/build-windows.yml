@@ -10,9 +10,13 @@ on:
         description: "Bundle CUDA-enabled PyTorch (much larger build)"
         type: boolean
         default: false
+      release_tag:
+        description: "If set, attach the built artifact to this release tag (e.g. v0.1.0)"
+        type: string
+        default: ""
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   # Include the event so a manual CUDA dispatch isn't cancelled by a push CI run.
@@ -239,3 +243,13 @@ jobs:
             dist/*.zip
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish to GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != '' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag != '' && inputs.release_tag || github.ref_name }}
+          files: |
+            dist/*.exe
+            dist/*.zip
+          fail_on_unmatched_files: false
